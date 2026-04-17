@@ -1,0 +1,39 @@
+{
+  "remoteApi": {
+    "host": "localhost",
+    "port": 23001
+  },
+  "playback": {
+    "smoothingAlpha": 0.2,
+    "rootPosePreference": [
+      "handRootTableFrozen",
+      "handRootTable",
+      "OpenXRRightHand",
+      "handRootWorld",
+      "handRootLocal"
+    ]
+  },
+  "transform": {
+    "positionAxes": ["x", "y", "z"],
+    "positionSigns": [1.0, 1.0, -1.0],
+    "positionOffset": [0.0, 0.0, 0.0],
+    "rotationAxes": ["x", "y", "z"],
+    "rotationSigns": [1.0, 1.0, -1.0]
+  },
+  "sceneObjects": {
+    "rootObject": "/hand_root",
+    "pointerProx": "/Allegro_Hand/pointer_proximal",
+    "pointerMid": "/Allegro_Hand/pointer_middle",
+    "pointerDist": "/Allegro_Hand/pointer_distal",
+    "middleProx": "/Allegro_Hand/middle_proximal",
+    "middleMid": "/Allegro_Hand/middle_middle",
+    "middleDist": "/Allegro_Hand/middle_distal",
+    "ringProx": "/Allegro_Hand/ring_proximal",
+    "ringMid": "/Allegro_Hand/ring_middle",
+    "ringDist": "/Allegro_Hand/ring_distal",
+    "thumbMeta": "/Allegro_Hand/thumb_metacarpal",
+    "thumbBase": "/Allegro_Hand/thumb_base",
+    "thumbProx": "/Allegro_Hand/thumb_proximal",
+    "thumbDist": "/Allegro_Hand/thumb_distal"
+  }
+}

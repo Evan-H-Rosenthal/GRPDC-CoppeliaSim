@@ -1,0 +1,17 @@
+# Python cache and virtual environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Test and type-checker caches
+.pytest_cache/
+.mypy_cache/
+
+# Editor settings
+.vscode/
+.idea/
+
+# OS files
+Thumbs.db
+.DS_Store

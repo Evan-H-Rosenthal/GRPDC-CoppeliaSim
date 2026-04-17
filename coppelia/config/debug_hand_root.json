@@ -1,0 +1,26 @@
+{
+  "remoteApi": {
+    "host": "localhost",
+    "port": 23001
+  },
+  "playback": {
+    "smoothingAlpha": 0.2,
+    "rootPosePreference": [
+      "handRootTableFrozen",
+      "OpenXRRightHand",
+      "handRootTable",
+      "handRootWorld",
+      "handRootLocal"
+    ]
+  },
+  "transform": {
+    "positionAxes": ["x", "y", "z"],
+    "positionSigns": [1.0, 1.0, -1.0],
+    "positionOffset": [0.0, 0.0, 0.0],
+    "rotationAxes": ["x", "y", "z"],
+    "rotationSigns": [1.0, 1.0, -1.0]
+  },
+  "sceneObjects": {
+    "rootObject": "/hand_root"
+  }
+}

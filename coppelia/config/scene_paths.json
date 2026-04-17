@@ -1,0 +1,41 @@
+{
+  "remoteApi": {
+    "host": "localhost",
+    "port": 23001
+  },
+  "playback": {
+    "smoothingAlpha": 0.2,
+    "rootPosePreference": [
+      "handRootTableFrozen",
+      "handRootTable",
+      "OpenXRRightHand",
+      "handRootWorld",
+      "handRootLocal"
+    ]
+  },
+  "transform": {
+    "positionAxes": ["z", "x", "y"],
+    "positionSigns": [1.0, 1.0, 1.0],
+    "positionOffset": [0.0, 0.0, 0.0],
+    "rotationAxes": ["z", "x", "y"],
+    "rotationSigns": [1.0, 1.0, 1.0]
+  },
+  "sceneObjects": {
+    "rootObject": "/Allegro_Hand",
+    "movingDummy": "/hand_root",
+    "kukaTarget": "/LBRiiwa14R820/kuka_target",
+    "pointerProx": "/Allegro_Hand/pointer_base/link_0_0_respondable/pointer_proximal",
+    "pointerMid": "/Allegro_Hand/pointer_base/link_0_0_respondable/pointer_proximal/link_1_0_respondable/pointer_middle",
+    "pointerDist": "/Allegro_Hand/pointer_base/link_0_0_respondable/pointer_proximal/link_1_0_respondable/pointer_middle/link_2_0_respondable/pointer_distal",
+    "middleProx": "/Allegro_Hand/middle_base/link_4_0_respondable/middle_proximal",
+    "middleMid": "/Allegro_Hand/middle_base/link_4_0_respondable/middle_proximal/link_5_0_respondable/middle_middle",
+    "middleDist": "/Allegro_Hand/middle_base/link_4_0_respondable/middle_proximal/link_5_0_respondable/middle_middle/link_6_0_respondable/middle_distal",
+    "ringProx": "/Allegro_Hand/ring_base/link_8_0_respondable/ring_proximal",
+    "ringMid": "/Allegro_Hand/ring_base/link_8_0_respondable/ring_proximal/link_9_0_respondable/ring_middle",
+    "ringDist": "/Allegro_Hand/ring_base/link_8_0_respondable/ring_proximal/link_9_0_respondable/ring_middle/link_10_0_respondable/ring_distal",
+    "thumbMeta": "/Allegro_Hand/thumb_metacarpal",
+    "thumbBase": "/Allegro_Hand/thumb_metacarpal/link_12_0_respondable/thumb_base",
+    "thumbProx": "/Allegro_Hand/thumb_metacarpal/link_12_0_respondable/thumb_base/link_13_0_respondable/thumb_proximal",
+    "thumbDist": "/Allegro_Hand/thumb_metacarpal/link_12_0_respondable/thumb_base/link_13_0_respondable/thumb_proximal/link_14_0_respondable/thumb_distal"
+  }
+}
