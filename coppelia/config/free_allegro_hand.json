@@ -20,6 +20,22 @@
     "rotationAxes": ["x", "y", "z"],
     "rotationSigns": [1.0, 1.0, -1.0]
   },
+  "jointAngleGains": {
+    "default": 1.0,
+    "XRHand_IndexProximal": 1.55,
+    "XRHand_IndexIntermediate": 1.55,
+    "XRHand_IndexDistal": 1.45,
+    "XRHand_MiddleProximal": 1.55,
+    "XRHand_MiddleIntermediate": 1.55,
+    "XRHand_MiddleDistal": 1.45,
+    "XRHand_RingProximal": 1.55,
+    "XRHand_RingIntermediate": 1.55,
+    "XRHand_RingDistal": 1.45,
+    "XRHand_ThumbMetacarpal": 1.15,
+    "XRHand_ThumbBase": 1.15,
+    "XRHand_ThumbProximal": 1.35,
+    "XRHand_ThumbDistal": 1.35
+  },
   "sceneObjects": {
     "rootObject": "/hand_root",
     "pointerProx": "/Allegro_Hand/pointer_proximal",
@@ -35,5 +51,11 @@
     "thumbBase": "/Allegro_Hand/thumb_base",
     "thumbProx": "/Allegro_Hand/thumb_proximal",
     "thumbDist": "/Allegro_Hand/thumb_distal"
+  },
+  "trackedObjects": {
+    "cube1Table": "/Cube1",
+    "cube2Table": "/Cube2",
+    "cube3Table": "/Cube3",
+    "cube4Table": "/Cube4"
   }
 }

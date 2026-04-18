@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,6 +43,7 @@ class SceneHandles:
     moving_dummy: int | None
     kuka_target: int | None
     joints: JointHandles
+    tracked_objects: dict[str, int]
 
 
 class SceneController:
@@ -53,6 +55,10 @@ class SceneController:
         self.filtered_position: list[float] | None = None
         self.filtered_quaternion: list[float] | None = None
         self.thumb_calibration = ThumbCalibration()
+
+    def _joint_gain(self, key: str, default: float = 1.0) -> float:
+        gains = self.config.get("jointAngleGains", {})
+        return float(gains.get(key, gains.get("default", default)))
 
     def connect(self) -> None:
         try:
@@ -81,6 +87,7 @@ class SceneController:
             raise RuntimeError("Remote API is not connected.")
 
         aliases = self.config["sceneObjects"]
+        tracked_objects_config = self.config.get("trackedObjects", {})
         return SceneHandles(
             root_object=self._get_object(aliases["rootObject"]),
             moving_dummy=self._get_optional_object(aliases.get("movingDummy")),
@@ -100,6 +107,10 @@ class SceneController:
                 thumb_prox=self._get_optional_object(aliases.get("thumbProx")),
                 thumb_dist=self._get_optional_object(aliases.get("thumbDist")),
             ),
+            tracked_objects={
+                field_name: self._get_object(alias)
+                for field_name, alias in tracked_objects_config.items()
+            },
         )
 
     def _get_object(self, alias: str) -> int:
@@ -156,6 +167,7 @@ class SceneController:
         self._set_joint_if_present(joints.ring_mid, rotations, "XRHand_RingIntermediate")
         self._set_joint_if_present(joints.ring_dist, rotations, "XRHand_RingDistal")
         self._apply_thumb(joints, rotations)
+        self._apply_tracked_objects(frame)
 
     def _set_joint_if_present(
         self,
@@ -166,7 +178,8 @@ class SceneController:
         rotation = rotations.get(key)
         if joint_handle is None or rotation is None or self.sim is None:
             return
-        self.sim.setJointPosition(joint_handle, quat_to_single_axis_joint(rotation))
+        gain = self._joint_gain(key)
+        self.sim.setJointPosition(joint_handle, quat_to_single_axis_joint(rotation) * gain)
 
     def _apply_thumb(self, joints: JointHandles, rotations: dict[str, list[float]]) -> None:
         if self.sim is None:
@@ -178,16 +191,47 @@ class SceneController:
                 metacarpal,
                 self.thumb_calibration,
             )
-            self.sim.setJointPosition(joints.thumb_meta, meta_angle)
-            self.sim.setJointPosition(joints.thumb_base, base_angle)
+            meta_offset = math.radians(15.069)
+            meta_gain = self._joint_gain("XRHand_ThumbMetacarpal", 1.0)
+            base_gain = self._joint_gain("XRHand_ThumbBase", 1.0)
+            scaled_meta = meta_offset + (meta_angle - meta_offset) * meta_gain
+            scaled_meta = min(max(scaled_meta, math.radians(15.069)), math.radians(79.985))
+            scaled_base = min(max(base_angle * base_gain, math.radians(-45.0)), math.radians(45.0))
+            self.sim.setJointPosition(joints.thumb_meta, scaled_meta)
+            self.sim.setJointPosition(joints.thumb_base, scaled_base)
 
         proximal = rotations.get("XRHand_ThumbProximal")
         if proximal is not None and joints.thumb_prox is not None:
-            self.sim.setJointPosition(joints.thumb_prox, quat_to_single_axis_joint(proximal))
+            gain = self._joint_gain("XRHand_ThumbProximal", 1.0)
+            self.sim.setJointPosition(joints.thumb_prox, quat_to_single_axis_joint(proximal) * gain)
 
         distal = rotations.get("XRHand_ThumbDistal")
         if distal is not None and joints.thumb_dist is not None:
-            self.sim.setJointPosition(joints.thumb_dist, quat_to_single_axis_joint(distal))
+            gain = self._joint_gain("XRHand_ThumbDistal", 1.0)
+            self.sim.setJointPosition(joints.thumb_dist, quat_to_single_axis_joint(distal) * gain)
+
+    def _apply_tracked_objects(self, frame: HandFrame) -> None:
+        if self.sim is None or self.handles is None:
+            return
+
+        transform = self.config.get("transform", {})
+        for field_name, handle in self.handles.tracked_objects.items():
+            pose = frame.tracked_objects.get(field_name)
+            if pose is None:
+                continue
+            position = remap_vector(
+                pose.position,
+                axes=transform.get("positionAxes", ["z", "x", "y"]),
+                signs=transform.get("positionSigns", [1.0, 1.0, 1.0]),
+                offset=transform.get("positionOffset", [0.0, 0.0, 0.0]),
+            )
+            rotation = remap_quaternion(
+                pose.rotation,
+                axes=transform.get("rotationAxes", ["z", "x", "y"]),
+                signs=transform.get("rotationSigns", [1.0, 1.0, 1.0]),
+            )
+            self.sim.setObjectPosition(handle, -1, position)
+            self.sim.setObjectQuaternion(handle, -1, rotation)
 
     def playback(
         self,

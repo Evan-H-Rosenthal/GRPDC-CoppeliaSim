@@ -30,6 +30,7 @@ class HandFrame:
     table_origin_world: Pose | None
     table_origin_recording_start_world: Pose | None
     table_origin_frozen: bool
+    tracked_objects: dict[str, Pose]
     raw: dict[str, Any]
 
 
@@ -108,6 +109,7 @@ def load_recording(path: str | Path, root_pose_preference: list[str]) -> list[Ha
                     "tableOriginRecordingStartWorld",
                 ),
                 table_origin_frozen=bool(payload.get("tableOriginFrozen", False)),
+                tracked_objects=_extract_tracked_objects(payload),
                 raw=payload,
             )
         )
@@ -138,3 +140,28 @@ def _read_optional_pose(frame: dict[str, Any], field_name: str) -> Pose | None:
     if _is_vec(pos, 3) and _is_vec(rot, 4):
         return Pose(position=list(map(float, pos)), rotation=list(map(float, rot)))
     return None
+
+
+def _extract_tracked_objects(frame: dict[str, Any]) -> dict[str, Pose]:
+    tracked: dict[str, Pose] = {}
+    for key in frame.keys():
+        if not key.endswith(("Table", "World", "Local")):
+            continue
+        if key in {
+            "handRootTable",
+            "handRootWorld",
+            "handRootLocal",
+            "tableOriginWorld",
+            "tableOriginRecordingStartWorld",
+            "OpenXRRightHand",
+        }:
+            continue
+        pose = _read_optional_pose(frame, key)
+        if pose is None:
+            continue
+        prefix = key.removesuffix("Table").removesuffix("World").removesuffix("Local")
+        tracked_flag = frame.get(f"{prefix}Tracked")
+        if tracked_flag is False:
+            continue
+        tracked[key] = pose
+    return tracked
