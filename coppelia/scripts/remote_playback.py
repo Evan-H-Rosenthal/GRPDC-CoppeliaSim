@@ -25,6 +25,10 @@ DEFAULT_STEPPING_DISABLED = False
 DEFAULT_PLAYBACK_SPEED = 1.0
 DEFAULT_ROOT_POSE: str | None = None
 DEFAULT_OPEN_FILE_DIALOG = True
+DEFAULT_CUBE_ROTATION_PLAYBACK: bool | None = True
+DEFAULT_CUBE_POSITION_GLITCH_REJECTION: bool | None = True
+DEFAULT_SMART_ROTATION_REJECTION: bool | None = False
+DEFAULT_SMART_ROTATION_REJECTION_MAX_DEGREES: float | None = 35.0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -157,6 +161,31 @@ def main() -> int:
             if candidate != root_pose_override
         ]
         config["playback"]["rootPosePreference"] = [root_pose_override, *existing]
+    if DEFAULT_CUBE_ROTATION_PLAYBACK is not None:
+        tracked_playback = config.setdefault("trackedObjectPlayback", {})
+        apply_rotation = tracked_playback.setdefault("applyRotationByField", {})
+        for cube_field in ("cube1Table", "cube2Table", "cube3Table", "cube4Table"):
+            apply_rotation[cube_field] = DEFAULT_CUBE_ROTATION_PLAYBACK
+    if DEFAULT_CUBE_POSITION_GLITCH_REJECTION is not None:
+        tracked_position_outlier = config.setdefault("trackedObjectPositionOutlier", {})
+        if not DEFAULT_CUBE_POSITION_GLITCH_REJECTION:
+            tracked_position_outlier["defaultMaxMeters"] = 1e9
+            tracked_position_outlier["defaultHoldFrames"] = 0
+            tracked_position_outlier["maxMetersByField"] = {}
+            tracked_position_outlier["holdFramesByField"] = {}
+    if DEFAULT_SMART_ROTATION_REJECTION is not None:
+        tracked_rotation_retarget = config.setdefault("trackedObjectRotationRetargeting", {})
+        tracked_rotation_retarget["defaultEnabled"] = DEFAULT_SMART_ROTATION_REJECTION
+        if not DEFAULT_SMART_ROTATION_REJECTION:
+            tracked_rotation_retarget["enabledByField"] = {}
+    if DEFAULT_SMART_ROTATION_REJECTION_MAX_DEGREES is not None:
+        tracked_rotation_retarget = config.setdefault("trackedObjectRotationRetargeting", {})
+        tracked_rotation_retarget["defaultMaxDegrees"] = float(
+            DEFAULT_SMART_ROTATION_REJECTION_MAX_DEGREES
+        )
+        max_by_field = tracked_rotation_retarget.setdefault("maxDegreesByField", {})
+        for cube_field in ("cube1Table", "cube2Table", "cube3Table", "cube4Table"):
+            max_by_field[cube_field] = float(DEFAULT_SMART_ROTATION_REJECTION_MAX_DEGREES)
     frames = load_recording(
         recording,
         root_pose_preference=config["playback"]["rootPosePreference"],

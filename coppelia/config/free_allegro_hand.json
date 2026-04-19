@@ -57,5 +57,85 @@
     "cube2Table": "/Cube2",
     "cube3Table": "/Cube3",
     "cube4Table": "/Cube4"
+  },
+  "trackedObjectSmoothing": {
+    "defaultPositionAlpha": 0.35,
+    "defaultRotationAlpha": 0.08,
+    "positionAlphaByField": {
+      "cube1Table": 0.35,
+      "cube2Table": 0.35,
+      "cube3Table": 0.35,
+      "cube4Table": 0.35
+    },
+    "rotationAlphaByField": {
+      "cube1Table": 0.08,
+      "cube2Table": 0.08,
+      "cube3Table": 0.08,
+      "cube4Table": 0.08
+    }
+  },
+  "trackedObjectRotationOutlier": {
+    "defaultMaxDegrees": 22.0,
+    "defaultHoldFrames": 3,
+    "maxDegreesByField": {
+      "cube1Table": 22.0,
+      "cube2Table": 22.0,
+      "cube3Table": 22.0,
+      "cube4Table": 22.0
+    },
+    "holdFramesByField": {
+      "cube1Table": 3,
+      "cube2Table": 3,
+      "cube3Table": 3,
+      "cube4Table": 3
+    }
+  },
+  "trackedObjectRotationRetargeting": {
+    "defaultEnabled": true,
+    "defaultMaxDegrees": 28.0,
+    "enabledByField": {
+      "cube1Table": true,
+      "cube2Table": true,
+      "cube3Table": true,
+      "cube4Table": true
+    },
+    "maxDegreesByField": {
+      "cube1Table": 28.0,
+      "cube2Table": 28.0,
+      "cube3Table": 28.0,
+      "cube4Table": 28.0
+    }
+  },
+  "trackedObjectPositionOutlier": {
+    "defaultMaxMeters": 0.03,
+    "defaultHoldFrames": 2,
+    "maxMetersByField": {
+      "cube1Table": 0.03,
+      "cube2Table": 0.03,
+      "cube3Table": 0.03,
+      "cube4Table": 0.03
+    },
+    "holdFramesByField": {
+      "cube1Table": 2,
+      "cube2Table": 2,
+      "cube3Table": 2,
+      "cube4Table": 2
+    }
+  },
+  "trackedObjectPlayback": {
+    "defaultApplyRotation": true,
+    "defaultRotationMode": "full",
+    "applyRotationByField": {
+      "cube1Table": true,
+      "cube2Table": true,
+      "cube3Table": true,
+      "cube4Table": true
+    },
+    "rotationModeByField": {
+      "cube1Table": "cube_symmetry",
+      "cube2Table": "cube_symmetry",
+      "cube3Table": "cube_symmetry",
+      "cube4Table": "cube_symmetry"
+    }
   }
 }

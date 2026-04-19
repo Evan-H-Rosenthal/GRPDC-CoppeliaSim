@@ -131,6 +131,97 @@ def align_quaternion_hemisphere(
     return current
 
 
+def quaternion_multiply(left: list[float], right: list[float]) -> list[float]:
+    lx, ly, lz, lw = left
+    rx, ry, rz, rw = right
+    return [
+        lw * rx + lx * rw + ly * rz - lz * ry,
+        lw * ry - lx * rz + ly * rw + lz * rx,
+        lw * rz + lx * ry - ly * rx + lz * rw,
+        lw * rw - lx * rx - ly * ry - lz * rz,
+    ]
+
+
+def quaternion_inverse(rotation: list[float]) -> list[float]:
+    x, y, z, w = normalize_quaternion(rotation)
+    return [-x, -y, -z, w]
+
+
+def nearest_cube_equivalent_rotation(
+    previous: list[float] | None,
+    current: list[float],
+) -> list[float]:
+    current = normalize_quaternion(current)
+    if previous is None:
+        return current
+
+    best = current
+    best_dot = -1.0
+    for symmetry in _cube_symmetry_quaternions():
+        candidate = normalize_quaternion(quaternion_multiply(current, symmetry))
+        candidate = align_quaternion_hemisphere(previous, candidate)
+        dot = abs(sum(previous[i] * candidate[i] for i in range(4)))
+        if dot > best_dot:
+            best_dot = dot
+            best = candidate
+    return best
+
+
+_CUBE_SYMMETRY_CACHE: list[list[float]] | None = None
+
+
+def _cube_symmetry_quaternions() -> list[list[float]]:
+    global _CUBE_SYMMETRY_CACHE
+    if _CUBE_SYMMETRY_CACHE is not None:
+        return _CUBE_SYMMETRY_CACHE
+
+    symmetries: list[list[float]] = []
+    permutations = [
+        (0, 1, 2),
+        (0, 2, 1),
+        (1, 0, 2),
+        (1, 2, 0),
+        (2, 0, 1),
+        (2, 1, 0),
+    ]
+    for perm in permutations:
+        parity = _permutation_parity(perm)
+        for sx in (-1.0, 1.0):
+            for sy in (-1.0, 1.0):
+                for sz in (-1.0, 1.0):
+                    determinant = parity * sx * sy * sz
+                    if determinant < 0.0:
+                        continue
+                    matrix = [[0.0, 0.0, 0.0] for _ in range(3)]
+                    matrix[0][perm[0]] = sx
+                    matrix[1][perm[1]] = sy
+                    matrix[2][perm[2]] = sz
+                    quat = normalize_quaternion(_matrix_to_quaternion(matrix))
+                    if not any(abs(sum(q[i] * quat[i] for i in range(4))) > 0.9999 for q in symmetries):
+                        symmetries.append(quat)
+
+    _CUBE_SYMMETRY_CACHE = symmetries
+    return symmetries
+
+
+def _permutation_parity(perm: tuple[int, int, int]) -> float:
+    inversions = 0
+    for i in range(len(perm)):
+        for j in range(i + 1, len(perm)):
+            if perm[i] > perm[j]:
+                inversions += 1
+    return -1.0 if inversions % 2 else 1.0
+
+
+def quaternion_to_yaw_only(rotation: list[float]) -> list[float]:
+    x, y, z, w = normalize_quaternion(rotation)
+    siny_cosp = 2.0 * (w * z + x * y)
+    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+    yaw = math.atan2(siny_cosp, cosy_cosp)
+    half = yaw * 0.5
+    return [0.0, 0.0, math.sin(half), math.cos(half)]
+
+
 def lerp_vector(previous: list[float] | None, current: list[float], alpha: float) -> list[float]:
     if previous is None:
         return current

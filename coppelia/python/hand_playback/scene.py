@@ -12,7 +12,11 @@ from .transforms import (
     align_quaternion_hemisphere,
     ThumbCalibration,
     lerp_vector,
+    nearest_cube_equivalent_rotation,
     normalize_quaternion,
+    quaternion_inverse,
+    quaternion_multiply,
+    quaternion_to_yaw_only,
     quat_to_single_axis_joint,
     remap_quaternion,
     remap_vector,
@@ -46,6 +50,15 @@ class SceneHandles:
     tracked_objects: dict[str, int]
 
 
+@dataclass
+class FilterState:
+    position: list[float] | None = None
+    quaternion: list[float] | None = None
+    held_rotation_frames: int = 0
+    held_position_frames: int = 0
+    rotation_correction: list[float] | None = None
+
+
 class SceneController:
     def __init__(self, config: dict[str, Any]) -> None:
         self.config = config
@@ -55,6 +68,7 @@ class SceneController:
         self.filtered_position: list[float] | None = None
         self.filtered_quaternion: list[float] | None = None
         self.thumb_calibration = ThumbCalibration()
+        self.tracked_object_filters: dict[str, FilterState] = {}
 
     def _joint_gain(self, key: str, default: float = 1.0) -> float:
         gains = self.config.get("jointAngleGains", {})
@@ -215,6 +229,41 @@ class SceneController:
             return
 
         transform = self.config.get("transform", {})
+        smoothing = self.config.get("trackedObjectSmoothing", {})
+        rotation_outlier = self.config.get("trackedObjectRotationOutlier", {})
+        rotation_retarget = self.config.get("trackedObjectRotationRetargeting", {})
+        position_outlier = self.config.get("trackedObjectPositionOutlier", {})
+        playback = self.config.get("trackedObjectPlayback", {})
+        default_position_alpha = float(
+            smoothing.get("defaultPositionAlpha", smoothing.get("defaultAlpha", 1.0))
+        )
+        default_rotation_alpha = float(
+            smoothing.get("defaultRotationAlpha", smoothing.get("defaultAlpha", 1.0))
+        )
+        per_object_position_alpha = smoothing.get(
+            "positionAlphaByField",
+            smoothing.get("alphaByField", {}),
+        )
+        per_object_rotation_alpha = smoothing.get(
+            "rotationAlphaByField",
+            smoothing.get("alphaByField", {}),
+        )
+        default_max_rotation_jump = float(rotation_outlier.get("defaultMaxDegrees", 180.0))
+        default_hold_frames = int(rotation_outlier.get("defaultHoldFrames", 0))
+        max_rotation_by_field = rotation_outlier.get("maxDegreesByField", {})
+        hold_frames_by_field = rotation_outlier.get("holdFramesByField", {})
+        default_retarget_enabled = bool(rotation_retarget.get("defaultEnabled", False))
+        enabled_retarget_by_field = rotation_retarget.get("enabledByField", {})
+        default_retarget_threshold = float(rotation_retarget.get("defaultMaxDegrees", 180.0))
+        retarget_threshold_by_field = rotation_retarget.get("maxDegreesByField", {})
+        default_max_position_jump = float(position_outlier.get("defaultMaxMeters", 1e9))
+        default_position_hold_frames = int(position_outlier.get("defaultHoldFrames", 0))
+        max_position_by_field = position_outlier.get("maxMetersByField", {})
+        position_hold_by_field = position_outlier.get("holdFramesByField", {})
+        default_apply_rotation = bool(playback.get("defaultApplyRotation", True))
+        apply_rotation_by_field = playback.get("applyRotationByField", {})
+        default_rotation_mode = str(playback.get("defaultRotationMode", "full"))
+        rotation_mode_by_field = playback.get("rotationModeByField", {})
         for field_name, handle in self.handles.tracked_objects.items():
             pose = frame.tracked_objects.get(field_name)
             if pose is None:
@@ -230,8 +279,124 @@ class SceneController:
                 axes=transform.get("rotationAxes", ["z", "x", "y"]),
                 signs=transform.get("rotationSigns", [1.0, 1.0, 1.0]),
             )
-            self.sim.setObjectPosition(handle, -1, position)
-            self.sim.setObjectQuaternion(handle, -1, rotation)
+            position_alpha = float(
+                per_object_position_alpha.get(field_name, default_position_alpha)
+            )
+            rotation_alpha = float(
+                per_object_rotation_alpha.get(field_name, default_rotation_alpha)
+            )
+            apply_rotation = bool(
+                apply_rotation_by_field.get(field_name, default_apply_rotation)
+            )
+            rotation_mode = str(
+                rotation_mode_by_field.get(field_name, default_rotation_mode)
+            ).lower()
+            filter_state = self.tracked_object_filters.setdefault(field_name, FilterState())
+            max_position_jump = float(
+                max_position_by_field.get(field_name, default_max_position_jump)
+            )
+            position_hold_frames = int(
+                position_hold_by_field.get(field_name, default_position_hold_frames)
+            )
+            if (
+                filter_state.position is not None
+                and max_position_jump < 1e8
+                and position_hold_frames > 0
+            ):
+                position_delta = math.sqrt(
+                    sum((position[i] - filter_state.position[i]) ** 2 for i in range(3))
+                )
+                if position_delta > max_position_jump:
+                    filter_state.held_position_frames += 1
+                    if filter_state.held_position_frames < position_hold_frames:
+                        position = filter_state.position
+                    else:
+                        filter_state.held_position_frames = 0
+                else:
+                    filter_state.held_position_frames = 0
+            filter_state.position = lerp_vector(
+                filter_state.position,
+                position,
+                position_alpha,
+            )
+            self.sim.setObjectPosition(handle, -1, filter_state.position)
+            if apply_rotation:
+                if rotation_mode == "yaw_only":
+                    rotation = quaternion_to_yaw_only(rotation)
+                elif rotation_mode == "cube_symmetry":
+                    rotation = nearest_cube_equivalent_rotation(
+                        filter_state.quaternion,
+                        rotation,
+                    )
+                if filter_state.rotation_correction is None:
+                    filter_state.rotation_correction = [0.0, 0.0, 0.0, 1.0]
+                retarget_enabled = bool(
+                    enabled_retarget_by_field.get(field_name, default_retarget_enabled)
+                )
+                retarget_threshold = float(
+                    retarget_threshold_by_field.get(field_name, default_retarget_threshold)
+                )
+                corrected_rotation = normalize_quaternion(
+                    quaternion_multiply(filter_state.rotation_correction, rotation)
+                )
+                corrected_rotation = align_quaternion_hemisphere(
+                    filter_state.quaternion,
+                    corrected_rotation,
+                )
+                if (
+                    retarget_enabled
+                    and filter_state.quaternion is not None
+                    and retarget_threshold < 180.0
+                ):
+                    corrected_delta = self._quaternion_angle_degrees(
+                        filter_state.quaternion,
+                        corrected_rotation,
+                    )
+                    if corrected_delta > retarget_threshold:
+                        filter_state.rotation_correction = normalize_quaternion(
+                            quaternion_multiply(
+                                filter_state.quaternion,
+                                quaternion_inverse(rotation),
+                            )
+                        )
+                        corrected_rotation = normalize_quaternion(
+                            quaternion_multiply(filter_state.rotation_correction, rotation)
+                        )
+                        corrected_rotation = align_quaternion_hemisphere(
+                            filter_state.quaternion,
+                            corrected_rotation,
+                        )
+                rotation = corrected_rotation
+                max_rotation_jump = float(
+                    max_rotation_by_field.get(field_name, default_max_rotation_jump)
+                )
+                hold_frames = int(hold_frames_by_field.get(field_name, default_hold_frames))
+                if (
+                    filter_state.quaternion is not None
+                    and max_rotation_jump < 180.0
+                    and hold_frames > 0
+                ):
+                    rotation_delta = self._quaternion_angle_degrees(
+                        filter_state.quaternion,
+                        rotation,
+                    )
+                    if rotation_delta > max_rotation_jump:
+                        filter_state.held_rotation_frames += 1
+                        if filter_state.held_rotation_frames < hold_frames:
+                            rotation = filter_state.quaternion
+                        else:
+                            filter_state.held_rotation_frames = 0
+                    else:
+                        filter_state.held_rotation_frames = 0
+                filter_state.quaternion = normalize_quaternion(
+                    lerp_vector(filter_state.quaternion, rotation, rotation_alpha)
+                )
+                self.sim.setObjectQuaternion(handle, -1, filter_state.quaternion)
+
+    def _quaternion_angle_degrees(self, left: list[float], right: list[float]) -> float:
+        dot = sum(left[i] * right[i] for i in range(4))
+        dot = max(-1.0, min(1.0, abs(dot)))
+        return math.degrees(2.0 * math.acos(dot))
 
     def playback(
         self,
