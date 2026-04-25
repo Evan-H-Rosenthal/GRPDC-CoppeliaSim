@@ -12,7 +12,7 @@ PYTHON_DIR = COPPELIA_DIR / "python"
 if str(PYTHON_DIR) not in sys.path:
     sys.path.insert(0, str(PYTHON_DIR))
 
-from hand_playback.recording import load_recording
+from hand_playback.recording import load_recording_data
 from hand_playback.scene import load_scene_config
 
 
@@ -27,10 +27,11 @@ def main() -> int:
     args = parser.parse_args()
 
     config = load_scene_config(args.config)
-    frames = load_recording(
+    recording_data = load_recording_data(
         args.recording,
         root_pose_preference=config["playback"]["rootPosePreference"],
     )
+    frames = recording_data.frames
 
     source_spaces = Counter(frame.source_space for frame in frames)
     root_fields = Counter()
@@ -54,6 +55,15 @@ def main() -> int:
     print(f"root_fields_used={dict(root_fields)}")
     print(f"table_origin_frozen_frames={frozen_frames}")
     print(f"table_origin_recording_start_frames={recording_start_frames}")
+    print(f"metadata_record_types={[entry.record_type for entry in recording_data.metadata]}")
+    metadata_keys = sorted(
+        {
+            key
+            for entry in recording_data.metadata
+            for key in entry.payload.keys()
+        }
+    )
+    print(f"metadata_keys={metadata_keys}")
     print(f"first_frame_keys={sorted(frames[0].raw.keys())}")
     return 0
 

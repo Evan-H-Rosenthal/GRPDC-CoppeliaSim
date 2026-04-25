@@ -20,7 +20,9 @@ from .transforms import (
     quat_to_single_axis_joint,
     remap_quaternion,
     remap_vector,
+    solve_thumb_root_angles,
     thumb_angles_from_metacarpal,
+    thumb_angles_from_metacarpal_xz,
 )
 
 
@@ -44,6 +46,7 @@ class JointHandles:
 @dataclass(frozen=True)
 class SceneHandles:
     root_object: int
+    hand_model: int | None
     moving_dummy: int | None
     kuka_target: int | None
     joints: JointHandles
@@ -68,6 +71,7 @@ class SceneController:
         self.filtered_position: list[float] | None = None
         self.filtered_quaternion: list[float] | None = None
         self.thumb_calibration = ThumbCalibration()
+        self.thumb_heuristic_calibration = ThumbCalibration()
         self.tracked_object_filters: dict[str, FilterState] = {}
 
     def _joint_gain(self, key: str, default: float = 1.0) -> float:
@@ -94,6 +98,8 @@ class SceneController:
         )
         self.sim = self._client.require("sim")
         self.handles = self._resolve_handles()
+        self._apply_scene_scaling()
+        self._apply_hand_alignment()
         print("Connected and resolved scene handles.")
 
     def _resolve_handles(self) -> SceneHandles:
@@ -104,6 +110,7 @@ class SceneController:
         tracked_objects_config = self.config.get("trackedObjects", {})
         return SceneHandles(
             root_object=self._get_object(aliases["rootObject"]),
+            hand_model=self._get_optional_object(aliases.get("handModel")),
             moving_dummy=self._get_optional_object(aliases.get("movingDummy")),
             kuka_target=self._get_optional_object(aliases.get("kukaTarget")),
             joints=JointHandles(
@@ -136,6 +143,167 @@ class SceneController:
         if not alias:
             return None
         return self._get_object(alias)
+
+    def _apply_scene_scaling(self) -> None:
+        if self.sim is None or self.handles is None:
+            return
+
+        scaling = self.config.get("sceneScaling", {})
+        hand_scale = float(scaling.get("handScaleFactor", 1.0))
+        if self.handles.hand_model is not None:
+            property_name = "customData.codexAppliedHandScale"
+            applied_scale = self.sim.getFloatProperty(
+                self.handles.hand_model,
+                property_name,
+                {"noError": True},
+            )
+            if applied_scale is None or applied_scale <= 0.0:
+                applied_scale = 1.0
+            relative_scale = hand_scale / applied_scale
+            if abs(relative_scale - 1.0) > 1e-6:
+                self.sim.scaleObjects([self.handles.hand_model], relative_scale, False)
+                print(
+                    f"Scaled hand model by factor {relative_scale:.3f} "
+                    f"(target absolute scale {hand_scale:.3f})."
+                )
+            self.sim.setFloatProperty(
+                self.handles.hand_model,
+                property_name,
+                hand_scale,
+            )
+
+    def _apply_hand_alignment(self) -> None:
+        if self.sim is None or self.handles is None or self.handles.hand_model is None:
+            return
+
+        alignment = self.config.get("sceneAlignment", {})
+        target_hand_model_offset = alignment.get("targetHandModelOffset")
+        if isinstance(target_hand_model_offset, list) and len(target_hand_model_offset) == 3:
+            property_names = [
+                "customData.codexAppliedHandOffsetX",
+                "customData.codexAppliedHandOffsetY",
+                "customData.codexAppliedHandOffsetZ",
+            ]
+            applied_delta: list[float] = []
+            for property_name in property_names:
+                value = self.sim.getFloatProperty(
+                    self.handles.hand_model,
+                    property_name,
+                    {"noError": True},
+                )
+                applied_delta.append(0.0 if value is None else float(value))
+
+            requested_delta = [float(value) for value in target_hand_model_offset]
+            relative_delta = [
+                requested_delta[index] - applied_delta[index]
+                for index in range(3)
+            ]
+
+            if any(abs(value) > 1e-6 for value in relative_delta):
+                local_position = self.sim.getObjectPosition(
+                    self.handles.hand_model,
+                    self.handles.root_object,
+                )
+                new_local_position = [
+                    local_position[index] + relative_delta[index]
+                    for index in range(3)
+                ]
+                self.sim.setObjectPosition(
+                    self.handles.hand_model,
+                    self.handles.root_object,
+                    new_local_position,
+                )
+                print(
+                    "Applied direct hand model offset delta "
+                    f"{[round(value, 6) for value in relative_delta]} "
+                    f"toward target {[round(value, 6) for value in requested_delta]}."
+                )
+
+            for index, property_name in enumerate(property_names):
+                self.sim.setFloatProperty(
+                    self.handles.hand_model,
+                    property_name,
+                    requested_delta[index],
+                )
+            return
+
+        target_offset = alignment.get("targetFingerBaseOffset")
+        if not isinstance(target_offset, list) or len(target_offset) != 3:
+            return
+
+        apply_axes = alignment.get("applyAxes", [False, False, True])
+        if not isinstance(apply_axes, list) or len(apply_axes) != 3:
+            apply_axes = [False, False, True]
+
+        samples: list[list[float]] = []
+        joints = self.handles.joints
+        for handle in (
+            joints.pointer_prox,
+            joints.middle_prox,
+            joints.ring_prox,
+            joints.thumb_meta,
+        ):
+            if handle is None:
+                continue
+            samples.append(self.sim.getObjectPosition(handle, self.handles.root_object))
+
+        if not samples:
+            return
+
+        current_average = [
+            sum(sample[index] for sample in samples) / len(samples)
+            for index in range(3)
+        ]
+        requested_delta = [
+            (float(target_offset[index]) - current_average[index]) if bool(apply_axes[index]) else 0.0
+            for index in range(3)
+        ]
+
+        property_names = [
+            "customData.codexAppliedHandOffsetX",
+            "customData.codexAppliedHandOffsetY",
+            "customData.codexAppliedHandOffsetZ",
+        ]
+        applied_delta: list[float] = []
+        for property_name in property_names:
+            value = self.sim.getFloatProperty(
+                self.handles.hand_model,
+                property_name,
+                {"noError": True},
+            )
+            applied_delta.append(0.0 if value is None else float(value))
+
+        relative_delta = [
+            requested_delta[index] - applied_delta[index]
+            for index in range(3)
+        ]
+
+        if any(abs(value) > 1e-6 for value in relative_delta):
+            local_position = self.sim.getObjectPosition(
+                self.handles.hand_model,
+                self.handles.root_object,
+            )
+            new_local_position = [
+                local_position[index] + relative_delta[index]
+                for index in range(3)
+            ]
+            self.sim.setObjectPosition(
+                self.handles.hand_model,
+                self.handles.root_object,
+                new_local_position,
+            )
+            print(
+                "Applied hand alignment delta "
+                f"{[round(value, 6) for value in relative_delta]} "
+                f"toward target offset {[round(value, 6) for value in target_offset]}."
+            )
+
+        for index, property_name in enumerate(property_names):
+            self.sim.setFloatProperty(
+                self.handles.hand_model,
+                property_name,
+                requested_delta[index],
+            )
 
     def apply_frame(self, frame: HandFrame) -> None:
         if self.sim is None or self.handles is None:
@@ -171,15 +339,19 @@ class SceneController:
 
         joints = self.handles.joints
         rotations = frame.joint_rotations
-        self._set_joint_if_present(joints.pointer_prox, rotations, "XRHand_IndexProximal")
-        self._set_joint_if_present(joints.pointer_mid, rotations, "XRHand_IndexIntermediate")
-        self._set_joint_if_present(joints.pointer_dist, rotations, "XRHand_IndexDistal")
-        self._set_joint_if_present(joints.middle_prox, rotations, "XRHand_MiddleProximal")
-        self._set_joint_if_present(joints.middle_mid, rotations, "XRHand_MiddleIntermediate")
-        self._set_joint_if_present(joints.middle_dist, rotations, "XRHand_MiddleDistal")
-        self._set_joint_if_present(joints.ring_prox, rotations, "XRHand_RingProximal")
-        self._set_joint_if_present(joints.ring_mid, rotations, "XRHand_RingIntermediate")
-        self._set_joint_if_present(joints.ring_dist, rotations, "XRHand_RingDistal")
+        finger_playback = self.config.get("fingerPlayback", {})
+        if bool(finger_playback.get("index", True)):
+            self._set_joint_if_present(joints.pointer_prox, rotations, "XRHand_IndexProximal")
+            self._set_joint_if_present(joints.pointer_mid, rotations, "XRHand_IndexIntermediate")
+            self._set_joint_if_present(joints.pointer_dist, rotations, "XRHand_IndexDistal")
+        if bool(finger_playback.get("middle", True)):
+            self._set_joint_if_present(joints.middle_prox, rotations, "XRHand_MiddleProximal")
+            self._set_joint_if_present(joints.middle_mid, rotations, "XRHand_MiddleIntermediate")
+            self._set_joint_if_present(joints.middle_dist, rotations, "XRHand_MiddleDistal")
+        if bool(finger_playback.get("ring", True)):
+            self._set_joint_if_present(joints.ring_prox, rotations, "XRHand_RingProximal")
+            self._set_joint_if_present(joints.ring_mid, rotations, "XRHand_RingIntermediate")
+            self._set_joint_if_present(joints.ring_dist, rotations, "XRHand_RingDistal")
         self._apply_thumb(joints, rotations)
         self._apply_tracked_objects(frame)
 
@@ -198,31 +370,59 @@ class SceneController:
     def _apply_thumb(self, joints: JointHandles, rotations: dict[str, list[float]]) -> None:
         if self.sim is None:
             return
+        if not bool(self.config.get("thumbPlayback", {}).get("enabled", True)):
+            return
+
+        thumb_coupling = self.config.get("thumbCoupling", {})
+        base_min = math.radians(float(thumb_coupling.get("baseMinDegrees", -6.0)))
+        base_max = math.radians(float(thumb_coupling.get("baseMaxDegrees", 66.0)))
+        meta_solve_blend = float(thumb_coupling.get("metaSolveBlend", 0.3))
+        base_solve_blend = float(thumb_coupling.get("baseSolveBlend", 0.75))
+
+        proximal = rotations.get("XRHand_ThumbProximal")
+        scaled_proximal = None
+        if proximal is not None:
+            proximal_angle = quat_to_single_axis_joint(proximal)
+            gain = self._joint_gain("XRHand_ThumbProximal", 1.0)
+            scaled_proximal = proximal_angle * gain
+            if joints.thumb_prox is not None:
+                self.sim.setJointPosition(joints.thumb_prox, scaled_proximal)
+
+        distal = rotations.get("XRHand_ThumbDistal")
+        scaled_distal = None
+        if distal is not None:
+            distal_angle = quat_to_single_axis_joint(distal)
+            gain = self._joint_gain("XRHand_ThumbDistal", 1.0)
+            scaled_distal = distal_angle * gain
+            if joints.thumb_dist is not None:
+                self.sim.setJointPosition(joints.thumb_dist, scaled_distal)
 
         metacarpal = rotations.get("XRHand_ThumbMetacarpal")
         if metacarpal is not None and joints.thumb_meta is not None and joints.thumb_base is not None:
-            meta_angle, base_angle = thumb_angles_from_metacarpal(
+            solved_proximal = 0.0 if scaled_proximal is None else scaled_proximal
+            solved_meta_angle, solved_base_angle = solve_thumb_root_angles(
                 metacarpal,
+                proximal,
+                solved_proximal,
                 self.thumb_calibration,
             )
-            meta_offset = math.radians(15.069)
-            meta_gain = self._joint_gain("XRHand_ThumbMetacarpal", 1.0)
-            base_gain = self._joint_gain("XRHand_ThumbBase", 1.0)
-            scaled_meta = meta_offset + (meta_angle - meta_offset) * meta_gain
-            scaled_meta = min(max(scaled_meta, math.radians(15.069)), math.radians(79.985))
-            scaled_base = min(max(base_angle * base_gain, math.radians(-45.0)), math.radians(45.0))
+            heuristic_meta_angle, heuristic_base_angle = thumb_angles_from_metacarpal_xz(
+                metacarpal,
+                self.thumb_heuristic_calibration,
+            )
+            meta_angle = (
+                (1.0 - meta_solve_blend) * heuristic_meta_angle
+                + meta_solve_blend * solved_meta_angle
+            )
+            base_angle = (
+                (1.0 - base_solve_blend) * heuristic_base_angle
+                + base_solve_blend * solved_base_angle
+            )
+            scaled_meta = meta_angle
+            scaled_base = base_angle
+            scaled_base = min(max(scaled_base, base_min), base_max)
             self.sim.setJointPosition(joints.thumb_meta, scaled_meta)
             self.sim.setJointPosition(joints.thumb_base, scaled_base)
-
-        proximal = rotations.get("XRHand_ThumbProximal")
-        if proximal is not None and joints.thumb_prox is not None:
-            gain = self._joint_gain("XRHand_ThumbProximal", 1.0)
-            self.sim.setJointPosition(joints.thumb_prox, quat_to_single_axis_joint(proximal) * gain)
-
-        distal = rotations.get("XRHand_ThumbDistal")
-        if distal is not None and joints.thumb_dist is not None:
-            gain = self._joint_gain("XRHand_ThumbDistal", 1.0)
-            self.sim.setJointPosition(joints.thumb_dist, quat_to_single_axis_joint(distal) * gain)
 
     def _apply_tracked_objects(self, frame: HandFrame) -> None:
         if self.sim is None or self.handles is None:
@@ -234,6 +434,8 @@ class SceneController:
         rotation_retarget = self.config.get("trackedObjectRotationRetargeting", {})
         position_outlier = self.config.get("trackedObjectPositionOutlier", {})
         playback = self.config.get("trackedObjectPlayback", {})
+        reference_frames = self.config.get("trackedObjectReferenceFrames", {})
+        local_transform = self.config.get("trackedObjectLocalTransform", {})
         default_position_alpha = float(
             smoothing.get("defaultPositionAlpha", smoothing.get("defaultAlpha", 1.0))
         )
@@ -268,17 +470,33 @@ class SceneController:
             pose = frame.tracked_objects.get(field_name)
             if pose is None:
                 continue
-            position = remap_vector(
-                pose.position,
-                axes=transform.get("positionAxes", ["z", "x", "y"]),
-                signs=transform.get("positionSigns", [1.0, 1.0, 1.0]),
-                offset=transform.get("positionOffset", [0.0, 0.0, 0.0]),
-            )
-            rotation = remap_quaternion(
-                pose.rotation,
-                axes=transform.get("rotationAxes", ["z", "x", "y"]),
-                signs=transform.get("rotationSigns", [1.0, 1.0, 1.0]),
-            )
+            reference_frame = str(reference_frames.get(field_name, "world"))
+            if reference_frame == "rootObject":
+                position = remap_vector(
+                    pose.position,
+                    axes=local_transform.get("positionAxes", ["x", "y", "z"]),
+                    signs=local_transform.get("positionSigns", [1.0, 1.0, 1.0]),
+                    offset=local_transform.get("positionOffset", [0.0, 0.0, 0.0]),
+                )
+                rotation = remap_quaternion(
+                    pose.rotation,
+                    axes=local_transform.get("rotationAxes", ["x", "y", "z"]),
+                    signs=local_transform.get("rotationSigns", [1.0, 1.0, 1.0]),
+                )
+                relative_to = self.handles.root_object
+            else:
+                position = remap_vector(
+                    pose.position,
+                    axes=transform.get("positionAxes", ["z", "x", "y"]),
+                    signs=transform.get("positionSigns", [1.0, 1.0, 1.0]),
+                    offset=transform.get("positionOffset", [0.0, 0.0, 0.0]),
+                )
+                rotation = remap_quaternion(
+                    pose.rotation,
+                    axes=transform.get("rotationAxes", ["z", "x", "y"]),
+                    signs=transform.get("rotationSigns", [1.0, 1.0, 1.0]),
+                )
+                relative_to = -1
             position_alpha = float(
                 per_object_position_alpha.get(field_name, default_position_alpha)
             )
@@ -319,7 +537,7 @@ class SceneController:
                 position,
                 position_alpha,
             )
-            self.sim.setObjectPosition(handle, -1, filter_state.position)
+            self.sim.setObjectPosition(handle, relative_to, filter_state.position)
             if apply_rotation:
                 if rotation_mode == "yaw_only":
                     rotation = quaternion_to_yaw_only(rotation)
@@ -391,7 +609,7 @@ class SceneController:
                 filter_state.quaternion = normalize_quaternion(
                     lerp_vector(filter_state.quaternion, rotation, rotation_alpha)
                 )
-                self.sim.setObjectQuaternion(handle, -1, filter_state.quaternion)
+                self.sim.setObjectQuaternion(handle, relative_to, filter_state.quaternion)
 
     def _quaternion_angle_degrees(self, left: list[float], right: list[float]) -> float:
         dot = sum(left[i] * right[i] for i in range(4))

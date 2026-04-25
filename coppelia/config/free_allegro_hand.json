@@ -36,8 +36,40 @@
     "XRHand_ThumbProximal": 1.35,
     "XRHand_ThumbDistal": 1.35
   },
+  "fingerPlayback": {
+    "index": false,
+    "middle": false,
+    "ring": false
+  },
+  "thumbPlayback": {
+    "enabled": false
+  },
+  "thumbCoupling": {
+    "baseMinDegrees": -6.0,
+    "baseMaxDegrees": 66.0,
+    "metaSolveBlend": 0.3,
+    "baseSolveBlend": 0.75,
+    "baseFromProximalGain": 0.4,
+    "baseFromDistalGain": 0.1,
+    "baseFlexionOnsetDegrees": 8.0
+  },
+  "sceneScaling": {
+    "autoFromMetadata": false,
+    "handScaleFactor": 1.0
+  },
+  "sceneAlignment": {
+    "autoFromMetadata": false,
+    "autoFromScaleReference": false,
+    "referenceScaleFactor": 0.72215,
+    "referenceHandModelOffset": [0.0, -0.03, -0.1],
+    "offsetScaleMultiplier": 1.0,
+    "measurementAxes": ["x", "y", "z"],
+    "measurementSigns": [1.0, 1.0, 1.0],
+    "applyAxes": [false, false, true]
+  },
   "sceneObjects": {
     "rootObject": "/hand_root",
+    "handModel": "/Allegro_Hand",
     "pointerProx": "/Allegro_Hand/pointer_proximal",
     "pointerMid": "/Allegro_Hand/pointer_middle",
     "pointerDist": "/Allegro_Hand/pointer_distal",
@@ -53,15 +85,39 @@
     "thumbDist": "/Allegro_Hand/thumb_distal"
   },
   "trackedObjects": {
+    "indexTipRelativeToWrist": "/pointer_target",
+    "middleTipRelativeToWrist": "/middle_target",
+    "ringTipRelativeToWrist": "/ring_target",
+    "littleTipRelativeToWrist": "/pinky_target",
+    "thumbTipRelativeToWrist": "/thumb_target",
     "cube1Table": "/Cube1",
     "cube2Table": "/Cube2",
     "cube3Table": "/Cube3",
     "cube4Table": "/Cube4"
   },
+  "trackedObjectReferenceFrames": {
+    "indexTipRelativeToWrist": "rootObject",
+    "middleTipRelativeToWrist": "rootObject",
+    "ringTipRelativeToWrist": "rootObject",
+    "littleTipRelativeToWrist": "rootObject",
+    "thumbTipRelativeToWrist": "rootObject"
+  },
+  "trackedObjectLocalTransform": {
+    "positionAxes": ["x", "y", "z"],
+    "positionSigns": [1.0, 1.0, -1.0],
+    "positionOffset": [0.0, 0.0, 0.0],
+    "rotationAxes": ["x", "y", "z"],
+    "rotationSigns": [1.0, 1.0, -1.0]
+  },
   "trackedObjectSmoothing": {
     "defaultPositionAlpha": 0.35,
     "defaultRotationAlpha": 0.08,
     "positionAlphaByField": {
+      "indexTipRelativeToWrist": 0.35,
+      "middleTipRelativeToWrist": 0.35,
+      "ringTipRelativeToWrist": 0.35,
+      "littleTipRelativeToWrist": 0.35,
+      "thumbTipRelativeToWrist": 0.35,
       "cube1Table": 0.35,
       "cube2Table": 0.35,
       "cube3Table": 0.35,
@@ -126,6 +182,11 @@
     "defaultApplyRotation": true,
     "defaultRotationMode": "full",
     "applyRotationByField": {
+      "indexTipRelativeToWrist": false,
+      "middleTipRelativeToWrist": false,
+      "ringTipRelativeToWrist": false,
+      "littleTipRelativeToWrist": false,
+      "thumbTipRelativeToWrist": false,
       "cube1Table": true,
       "cube2Table": true,
       "cube3Table": true,

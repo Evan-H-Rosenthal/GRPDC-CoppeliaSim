@@ -238,8 +238,13 @@ def quat_to_single_axis_joint(rotation: list[float]) -> float:
 
 @dataclass
 class ThumbCalibration:
+    metacarpal_reference: list[float] | None = None
     meta_baseline: float | None = None
     base_baseline: float | None = None
+    chain_reference: list[float] | None = None
+    chain_reference_direction: list[float] | None = None
+    previous_meta_angle: float | None = None
+    previous_base_angle: float | None = None
 
 
 def thumb_angles_from_metacarpal(
@@ -267,3 +272,224 @@ def thumb_angles_from_metacarpal(
     meta_angle = min(max(meta_angle, math.radians(15.069)), math.radians(79.985))
     base_angle = min(max(base_angle, math.radians(-45.0)), math.radians(45.0))
     return meta_angle, base_angle
+
+
+def thumb_angles_from_metacarpal_xz(
+    rotation: list[float],
+    calibration: ThumbCalibration,
+) -> tuple[float, float]:
+    if calibration.metacarpal_reference is None:
+        calibration.metacarpal_reference = normalize_quaternion(rotation)
+
+    relative_rotation = normalize_quaternion(
+        quaternion_multiply(
+            quaternion_inverse(calibration.metacarpal_reference),
+            rotation,
+        )
+    )
+    matrix = _quaternion_to_matrix(relative_rotation)
+
+    # Decompose the recorded thumb-metacarpal motion in the same serial order as
+    # the Allegro thumb root chain: metacarpal first, then base swivel.
+    meta_delta = math.atan2(-matrix[1][2], matrix[2][2])
+    swivel_delta = math.atan2(matrix[1][0], matrix[0][0])
+    rotvec = quaternion_to_rotation_vector(relative_rotation)
+    opposition_delta = max(rotvec[1], 0.0)
+
+    # The Allegro thumb needs additional positive base swivel to emulate human
+    # thumb opposition. We use the metacarpal's secondary local rotation as an
+    # "opposition assist" and blend in a small amount of metacarpal flexion so
+    # the thumb can fold inward instead of just hinging across the palm.
+    base_delta = (
+        swivel_delta
+        + 0.85 * opposition_delta
+        + 0.25 * max(meta_delta, 0.0)
+    )
+
+    meta_angle = math.radians(15.069) + meta_delta
+    base_angle = base_delta
+
+    meta_angle = min(max(meta_angle, math.radians(15.069)), math.radians(79.985))
+    base_angle = min(max(base_angle, math.radians(-6.0)), math.radians(66.0))
+    return meta_angle, base_angle
+
+
+def quaternion_to_rotation_vector(rotation: list[float]) -> list[float]:
+    x, y, z, w = normalize_quaternion(rotation)
+    angle = 2.0 * math.acos(max(-1.0, min(1.0, w)))
+    sin_half = math.sqrt(max(1.0 - w * w, 0.0))
+    if sin_half < 1e-6:
+        return [2.0 * x, 2.0 * y, 2.0 * z]
+    axis = [x / sin_half, y / sin_half, z / sin_half]
+    return [axis[i] * angle for i in range(3)]
+
+
+_THUMB_ROOT_RPY = [0.0, -1.65806278845, -1.5707963259]
+_THUMB_META_REST = math.radians(15.069)
+_THUMB_META_MIN = math.radians(15.069)
+_THUMB_META_MAX = math.radians(79.985)
+_THUMB_BASE_MIN = math.radians(-6.0)
+_THUMB_BASE_MAX = math.radians(66.0)
+
+
+def solve_thumb_root_angles(
+    metacarpal_rotation: list[float],
+    proximal_rotation: list[float] | None,
+    proximal_angle: float,
+    calibration: ThumbCalibration,
+) -> tuple[float, float]:
+    combined_rotation = normalize_quaternion(metacarpal_rotation)
+    if proximal_rotation is not None:
+        combined_rotation = normalize_quaternion(
+            quaternion_multiply(combined_rotation, proximal_rotation)
+        )
+
+    if calibration.chain_reference is None:
+        calibration.chain_reference = combined_rotation
+        calibration.chain_reference_direction = _thumb_model_direction(
+            _THUMB_META_REST,
+            0.0,
+            proximal_angle,
+        )
+        calibration.previous_meta_angle = _THUMB_META_REST
+        calibration.previous_base_angle = 0.0
+
+    relative_rotation = normalize_quaternion(
+        quaternion_multiply(
+            combined_rotation,
+            quaternion_inverse(calibration.chain_reference),
+        )
+    )
+    target_direction = _matvec(
+        _quaternion_to_matrix(relative_rotation),
+        calibration.chain_reference_direction or [0.0, 0.0, 1.0],
+    )
+    target_direction = _normalize_vector(target_direction)
+
+    initial_meta = (
+        calibration.previous_meta_angle
+        if calibration.previous_meta_angle is not None
+        else _THUMB_META_REST
+    )
+    initial_base = (
+        calibration.previous_base_angle
+        if calibration.previous_base_angle is not None
+        else 0.0
+    )
+
+    # Coarse-to-fine search around the previous solution.
+    best_meta = initial_meta
+    best_base = initial_base
+    best_cost = _thumb_direction_cost(best_meta, best_base, proximal_angle, target_direction)
+    for meta_step_deg, base_step_deg in ((18.0, 20.0), (8.0, 10.0), (3.0, 4.0), (1.0, 1.5)):
+        meta_step = math.radians(meta_step_deg)
+        base_step = math.radians(base_step_deg)
+        improved = True
+        while improved:
+            improved = False
+            for meta_dir in (-1.0, 0.0, 1.0):
+                for base_dir in (-1.0, 0.0, 1.0):
+                    candidate_meta = min(
+                        max(best_meta + meta_dir * meta_step, _THUMB_META_MIN),
+                        _THUMB_META_MAX,
+                    )
+                    candidate_base = min(
+                        max(best_base + base_dir * base_step, _THUMB_BASE_MIN),
+                        _THUMB_BASE_MAX,
+                    )
+                    cost = _thumb_direction_cost(
+                        candidate_meta,
+                        candidate_base,
+                        proximal_angle,
+                        target_direction,
+                    )
+                    if cost + 1e-8 < best_cost:
+                        best_cost = cost
+                        best_meta = candidate_meta
+                        best_base = candidate_base
+                        improved = True
+
+    calibration.previous_meta_angle = best_meta
+    calibration.previous_base_angle = best_base
+    return best_meta, best_base
+
+
+def _thumb_direction_cost(
+    meta_angle: float,
+    base_angle: float,
+    proximal_angle: float,
+    target_direction: list[float],
+) -> float:
+    direction = _thumb_model_direction(meta_angle, base_angle, proximal_angle)
+    dot = max(-1.0, min(1.0, sum(direction[i] * target_direction[i] for i in range(3))))
+    return math.acos(dot)
+
+
+def _thumb_model_direction(
+    meta_angle: float,
+    base_angle: float,
+    proximal_angle: float,
+) -> list[float]:
+    rotation = _matmul(
+        _rpy_to_matrix(_THUMB_ROOT_RPY),
+        _matmul(
+            _rotation_x(-meta_angle),
+            _matmul(
+                _rotation_z(base_angle),
+                _rotation_y(proximal_angle),
+            ),
+        ),
+    )
+    return _normalize_vector(_matvec(rotation, [0.0, 0.0, 1.0]))
+
+
+def _rotation_x(angle: float) -> list[list[float]]:
+    c = math.cos(angle)
+    s = math.sin(angle)
+    return [
+        [1.0, 0.0, 0.0],
+        [0.0, c, -s],
+        [0.0, s, c],
+    ]
+
+
+def _rotation_y(angle: float) -> list[list[float]]:
+    c = math.cos(angle)
+    s = math.sin(angle)
+    return [
+        [c, 0.0, s],
+        [0.0, 1.0, 0.0],
+        [-s, 0.0, c],
+    ]
+
+
+def _rotation_z(angle: float) -> list[list[float]]:
+    c = math.cos(angle)
+    s = math.sin(angle)
+    return [
+        [c, -s, 0.0],
+        [s, c, 0.0],
+        [0.0, 0.0, 1.0],
+    ]
+
+
+def _rpy_to_matrix(rpy: list[float]) -> list[list[float]]:
+    roll, pitch, yaw = rpy
+    return _matmul(
+        _rotation_z(yaw),
+        _matmul(_rotation_y(pitch), _rotation_x(roll)),
+    )
+
+
+def _matvec(matrix: list[list[float]], vector: list[float]) -> list[float]:
+    return [
+        sum(matrix[row][column] * vector[column] for column in range(3))
+        for row in range(3)
+    ]
+
+
+def _normalize_vector(vector: list[float]) -> list[float]:
+    magnitude = math.sqrt(sum(component * component for component in vector))
+    if magnitude <= 1e-9:
+        return [0.0, 0.0, 1.0]
+    return [component / magnitude for component in vector]

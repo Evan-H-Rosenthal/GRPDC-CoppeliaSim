@@ -14,6 +14,14 @@ FINGER_PREFIXES = {
     "thumb": "XRHand_Thumb",
 }
 
+VECTOR_TRACKED_FIELDS = {
+    "indexTipRelativeToWrist",
+    "middleTipRelativeToWrist",
+    "ringTipRelativeToWrist",
+    "littleTipRelativeToWrist",
+    "thumbTipRelativeToWrist",
+}
+
 
 @dataclass(frozen=True)
 class Pose:
@@ -32,6 +40,38 @@ class HandFrame:
     table_origin_frozen: bool
     tracked_objects: dict[str, Pose]
     raw: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class RecordingMetadata:
+    record_type: str
+    payload: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class RecordingData:
+    frames: list[HandFrame]
+    metadata: list[RecordingMetadata]
+
+
+ALLEGRO_REFERENCE_DISTANCES_METERS = {
+    ("XRHand_IndexProximal", "XRHand_IndexIntermediate"): 0.0540,
+    ("XRHand_IndexIntermediate", "XRHand_IndexDistal"): 0.0384,
+    ("XRHand_IndexDistal", "XRHand_IndexTip"): 0.0267,
+    ("XRHand_MiddleProximal", "XRHand_MiddleIntermediate"): 0.0540,
+    ("XRHand_MiddleIntermediate", "XRHand_MiddleDistal"): 0.0384,
+    ("XRHand_MiddleDistal", "XRHand_MiddleTip"): 0.0267,
+    ("XRHand_RingProximal", "XRHand_RingIntermediate"): 0.0540,
+    ("XRHand_RingIntermediate", "XRHand_RingDistal"): 0.0384,
+    ("XRHand_RingDistal", "XRHand_RingTip"): 0.0267,
+}
+
+HAND_ALIGNMENT_MEASUREMENT_KEYS = (
+    "XRHand_IndexProximal",
+    "XRHand_MiddleProximal",
+    "XRHand_RingProximal",
+    "XRHand_ThumbMetacarpal",
+)
 
 
 def _read_json_lines(path: Path) -> Iterable[dict[str, Any]]:
@@ -91,11 +131,21 @@ def _is_vec(value: Any, length: int) -> bool:
     return isinstance(value, list) and len(value) == length
 
 
-def load_recording(path: str | Path, root_pose_preference: list[str]) -> list[HandFrame]:
+def load_recording_data(path: str | Path, root_pose_preference: list[str]) -> RecordingData:
     recording_path = Path(path)
     frames: list[HandFrame] = []
+    metadata: list[RecordingMetadata] = []
 
     for payload in _read_json_lines(recording_path):
+        record_type = str(payload.get("recordType", "frame"))
+        if record_type != "frame":
+            metadata.append(
+                RecordingMetadata(
+                    record_type=record_type,
+                    payload=payload,
+                )
+            )
+            continue
         source_space, root_pose = _read_pose(payload, root_pose_preference)
         frames.append(
             HandFrame(
@@ -117,7 +167,86 @@ def load_recording(path: str | Path, root_pose_preference: list[str]) -> list[Ha
     if not frames:
         raise ValueError(f"No frames were loaded from {recording_path}.")
 
-    return frames
+    return RecordingData(frames=frames, metadata=metadata)
+
+
+def load_recording(path: str | Path, root_pose_preference: list[str]) -> list[HandFrame]:
+    return load_recording_data(path, root_pose_preference).frames
+
+
+def compute_hand_scale_factor(metadata: list[RecordingMetadata]) -> float | None:
+    metadata_record = next(
+        (entry.payload for entry in metadata if entry.record_type == "metadata"),
+        None,
+    )
+    if not metadata_record:
+        return None
+
+    if str(metadata_record.get("jointDistanceUnit", "meters")).lower() != "meters":
+        return None
+
+    joint_distances = metadata_record.get("jointDistances")
+    if not isinstance(joint_distances, list):
+        return None
+
+    ratios: list[float] = []
+    for item in joint_distances:
+        if not isinstance(item, dict):
+            continue
+        key = (str(item.get("from", "")), str(item.get("to", "")))
+        reference_distance = ALLEGRO_REFERENCE_DISTANCES_METERS.get(key)
+        if reference_distance is None or reference_distance <= 0.0:
+            continue
+        measured_distance = item.get("distance")
+        if not isinstance(measured_distance, (int, float)) or measured_distance <= 0.0:
+            continue
+        ratios.append(float(measured_distance) / reference_distance)
+
+    if not ratios:
+        return None
+
+    ratios.sort()
+    midpoint = len(ratios) // 2
+    if len(ratios) % 2 == 1:
+        return ratios[midpoint]
+    return 0.5 * (ratios[midpoint - 1] + ratios[midpoint])
+
+
+def compute_hand_alignment_offset(metadata: list[RecordingMetadata]) -> list[float] | None:
+    metadata_record = next(
+        (entry.payload for entry in metadata if entry.record_type == "metadata"),
+        None,
+    )
+    if not metadata_record:
+        return None
+
+    measurements = metadata_record.get("wristToFingerBaseMeasurements")
+    if not isinstance(measurements, list):
+        return None
+
+    offsets: list[list[float]] = []
+    for key in HAND_ALIGNMENT_MEASUREMENT_KEYS:
+        match = next(
+            (
+                item
+                for item in measurements
+                if isinstance(item, dict)
+                and str(item.get("to", "")) == key
+                and _is_vec(item.get("offset"), 3)
+            ),
+            None,
+        )
+        if match is None:
+            continue
+        offsets.append(list(map(float, match["offset"])))
+
+    if not offsets:
+        return None
+
+    return [
+        sum(offset[index] for offset in offsets) / len(offsets)
+        for index in range(3)
+    ]
 
 
 def _extract_joint_rotations(frame: dict[str, Any]) -> dict[str, list[float]]:
@@ -145,6 +274,12 @@ def _read_optional_pose(frame: dict[str, Any], field_name: str) -> Pose | None:
 def _extract_tracked_objects(frame: dict[str, Any]) -> dict[str, Pose]:
     tracked: dict[str, Pose] = {}
     for key in frame.keys():
+        if key in VECTOR_TRACKED_FIELDS and _is_vec(frame.get(key), 3):
+            tracked[key] = Pose(
+                position=list(map(float, frame[key])),
+                rotation=[0.0, 0.0, 0.0, 1.0],
+            )
+            continue
         if not key.endswith(("Table", "World", "Local")):
             continue
         if key in {

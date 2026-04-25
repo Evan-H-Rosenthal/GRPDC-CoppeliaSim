@@ -11,14 +11,19 @@ PYTHON_DIR = COPPELIA_DIR / "python"
 if str(PYTHON_DIR) not in sys.path:
     sys.path.insert(0, str(PYTHON_DIR))
 
-from hand_playback.recording import load_recording
+from hand_playback.recording import (
+    compute_hand_alignment_offset,
+    compute_hand_scale_factor,
+    load_recording_data,
+)
+from hand_playback.transforms import remap_vector
 from hand_playback.scene import SceneController, load_scene_config
 
 
 DEFAULT_CONFIG_PATH = COPPELIA_DIR / "config" / "free_allegro_hand.json"
 DEFAULT_RECORDINGS_DIR = COPPELIA_DIR / "recordings"
 DEFAULT_REMOTE_API_HOST_OVERRIDE: str | None = None
-DEFAULT_REMOTE_API_PORT_OVERRIDE: int | None = 23000
+DEFAULT_REMOTE_API_PORT_OVERRIDE: int | None = 23001
 DEFAULT_START_SIMULATION = True
 DEFAULT_USE_REALTIME = True
 DEFAULT_STEPPING_DISABLED = False
@@ -186,15 +191,75 @@ def main() -> int:
         max_by_field = tracked_rotation_retarget.setdefault("maxDegreesByField", {})
         for cube_field in ("cube1Table", "cube2Table", "cube3Table", "cube4Table"):
             max_by_field[cube_field] = float(DEFAULT_SMART_ROTATION_REJECTION_MAX_DEGREES)
-    frames = load_recording(
+    recording_data = load_recording_data(
         recording,
         root_pose_preference=config["playback"]["rootPosePreference"],
     )
+    frames = recording_data.frames
+
+    scene_scaling = config.setdefault("sceneScaling", {})
+    metadata_scale_enabled = bool(scene_scaling.get("autoFromMetadata", True))
+    manual_scale_multiplier = float(scene_scaling.get("handScaleFactor", 1.0))
+    computed_hand_scale = None
+    if metadata_scale_enabled:
+        computed_hand_scale = compute_hand_scale_factor(recording_data.metadata)
+        if computed_hand_scale is not None:
+            effective_scale = computed_hand_scale * manual_scale_multiplier
+            scene_scaling["handScaleFactor"] = effective_scale
+            print(
+                f"Computed hand scale factor from recording metadata: "
+                f"{computed_hand_scale:.3f} "
+                f"(manual multiplier {manual_scale_multiplier:.3f}, "
+                f"effective {effective_scale:.3f})."
+            )
+
+    scene_alignment = config.setdefault("sceneAlignment", {})
+    metadata_alignment_enabled = bool(scene_alignment.get("autoFromMetadata", True))
+    if metadata_alignment_enabled:
+        raw_alignment_offset = compute_hand_alignment_offset(recording_data.metadata)
+        if raw_alignment_offset is not None:
+            alignment_axes = scene_alignment.get("measurementAxes", ["x", "y", "z"])
+            alignment_signs = scene_alignment.get("measurementSigns", [1.0, 1.0, 1.0])
+            remapped_alignment_offset = remap_vector(
+                raw_alignment_offset,
+                axes=alignment_axes,
+                signs=alignment_signs,
+                offset=[0.0, 0.0, 0.0],
+            )
+            scene_alignment["targetFingerBaseOffset"] = remapped_alignment_offset
+            print(
+                "Computed target hand alignment offset from metadata: "
+                f"{[round(value, 6) for value in remapped_alignment_offset]}"
+            )
+    scale_reference_enabled = bool(scene_alignment.get("autoFromScaleReference", False))
+    if scale_reference_enabled and computed_hand_scale is not None:
+        reference_scale = float(scene_alignment.get("referenceScaleFactor", 1.0))
+        reference_offset = scene_alignment.get("referenceHandModelOffset", [0.0, 0.0, 0.0])
+        offset_multiplier = float(scene_alignment.get("offsetScaleMultiplier", 1.0))
+        if (
+            reference_scale > 1e-6
+            and isinstance(reference_offset, list)
+            and len(reference_offset) == 3
+        ):
+            scale_ratio = computed_hand_scale / reference_scale
+            target_offset = [
+                float(reference_offset[index]) * scale_ratio * offset_multiplier
+                for index in range(3)
+            ]
+            scene_alignment["targetHandModelOffset"] = target_offset
+            print(
+                "Computed target hand model offset from scale reference: "
+                f"{[round(value, 6) for value in target_offset]} "
+                f"(scale ratio {scale_ratio:.3f})."
+            )
 
     print(
         f"Loaded {len(frames)} frames from {recording} "
         f"using root preference {config['playback']['rootPosePreference']}."
     )
+    if recording_data.metadata:
+        metadata_types = [entry.record_type for entry in recording_data.metadata]
+        print(f"Loaded metadata records: {metadata_types}")
     if args.dry_run:
         first = frames[0]
         print(
