@@ -23,7 +23,8 @@ from hand_playback.scene import SceneController, load_scene_config
 DEFAULT_CONFIG_PATH = COPPELIA_DIR / "config" / "free_allegro_hand.json"
 DEFAULT_RECORDINGS_DIR = COPPELIA_DIR / "recordings"
 DEFAULT_REMOTE_API_HOST_OVERRIDE: str | None = None
-DEFAULT_REMOTE_API_PORT_OVERRIDE: int | None = None
+# Change this to match the ZMQ Remote API rpcPort printed in Coppelia's console on scene startup
+DEFAULT_REMOTE_API_PORT_OVERRIDE: int | None = 23000
 DEFAULT_START_SIMULATION = True
 DEFAULT_USE_REALTIME = True
 DEFAULT_STEPPING_DISABLED = False
